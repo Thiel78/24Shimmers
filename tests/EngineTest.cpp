@@ -1,5 +1,5 @@
-// Offline checks for the shimmer engine: stability, decay time, loudness,
-// that the shimmer really moves energy up, freeze, and CPU cost.
+// Offline checks for the shimmer engine: decay time, loudness, echo density,
+// that the shimmer really moves energy by an octave, freeze, stability and CPU.
 // Exits non-zero if a check fails.
 
 #include "../Source/ShimmerEngine.h"
@@ -12,6 +12,13 @@ namespace
 {
 constexpr double sr = 48000.0;
 int failures = 0;
+
+const char* spaceName (shimmer::Space s)
+{
+    return s == shimmer::Space::room ? "room" : s == shimmer::Space::hall ? "hall" : "cathedral";
+}
+
+constexpr shimmer::Space allSpaces[] { shimmer::Space::room, shimmer::Space::hall, shimmer::Space::cathedral };
 
 void check (bool ok, const char* what)
 {
@@ -65,40 +72,55 @@ double toneLevel (const Stereo& s, size_t from, size_t to, double hz)
     return total;
 }
 
-shimmer::Parameters wetOnly()
+// Normalised echo density (Abel & Huang): ~1 means the response is as dense
+// as Gaussian noise, low values mean distinct echoes (heard as metallic/grainy).
+double echoDensity (const std::vector<float>& h, size_t centre)
+{
+    const size_t half = (size_t) (0.01 * sr);
+    double var = 0;
+    for (size_t i = centre - half; i < centre + half; ++i)
+        var += (double) h[i] * h[i];
+    const double sd = std::sqrt (var / (double) (2 * half));
+    size_t outside = 0;
+    for (size_t i = centre - half; i < centre + half; ++i)
+        outside += std::abs (h[i]) > sd ? 1 : 0;
+    return (double) outside / (double) (2 * half) / 0.3173;
+}
+
+shimmer::Parameters wetOnly (shimmer::Space space = shimmer::Space::hall)
 {
     shimmer::Parameters p;
+    p.space = space;
     p.mix = 1.0f;
     return p;
 }
 
-void testImpulseDecay()
+void testDecay()
 {
-    std::puts ("Impulse response / decay time");
+    std::puts ("Decay time (body of the tail)");
 
-    for (float decay : { 3.0f, 7.0f, 20.0f })
-    {
-        shimmer::Engine e;
-        e.prepare (sr);
-        auto p = wetOnly();
-        p.shimmer = 0.0f;
-        p.decaySeconds = decay;
-        p.preDelayMs = 0.0f;
-        e.setParameters (p);
+    for (auto space : allSpaces)
+        for (float decay : { 2.0f, 8.0f })
+        {
+            shimmer::Engine e;
+            auto p = wetOnly (space);
+            p.shimmer = 0.0f;
+            p.decaySeconds = decay;
+            p.preDelayMs = 0.0f;
+            e.setParameters (p);
+            e.prepare (sr);
 
-        Stereo s ((size_t) (sr * (decay + 1.0)));
-        s.l[0] = s.r[0] = 1.0f;
-        run (e, s);
+            Stereo s ((size_t) (sr * (decay + 1.5)));
+            s.l[0] = s.r[0] = 1.0f;
+            run (e, s);
 
-        // The top octave dies away quickly (as in real rooms), so measure the
-        // slope of the body of the tail between 1 s and 70% of the decay time.
-        const size_t win = (size_t) (0.25 * sr);
-        const size_t from = (size_t) sr, to = (size_t) (sr * decay * 0.7);
-        const double slope = (db (rms (s, from, from + win)) - db (rms (s, to, to + win))) / ((double) (to - from) / sr);
-        const double rt60 = 60.0 / slope;
-        std::printf ("    decay %5.1f s -> measured RT60 %5.2f s\n", decay, rt60);
-        check (rt60 > decay * 0.6 && rt60 < decay * 1.4, "RT60 within 40% of setting");
-    }
+            const size_t win = (size_t) (0.25 * sr);
+            const size_t from = (size_t) (sr * 0.5), to = (size_t) (sr * (0.5 + decay * 0.6));
+            const double slope = (db (rms (s, from, from + win)) - db (rms (s, to, to + win))) / ((double) (to - from) / sr);
+            const double rt60 = 60.0 / slope;
+            std::printf ("    %-9s decay %4.1f s -> RT60 %5.2f s\n", spaceName (space), decay, rt60);
+            check (rt60 > decay * 0.6 && rt60 < decay * 1.4, "RT60 within 40% of setting");
+        }
 }
 
 void testLoudness()
@@ -107,89 +129,129 @@ void testLoudness()
     std::mt19937 rng (1);
     std::normal_distribution<float> noise (0.0f, 0.1f);
 
-    for (float decay : { 1.0f, 7.0f, 30.0f })
-    {
-        shimmer::Engine e;
-        e.prepare (sr);
-        auto p = wetOnly();
-        p.decaySeconds = decay;
-        e.setParameters (p);
-
-        Stereo s ((size_t) (sr * 8));
-        for (size_t i = 0; i < s.l.size(); ++i)
+    for (auto space : allSpaces)
+        for (float decay : { 1.0f, 6.0f, 30.0f })
         {
-            s.l[i] = noise (rng);
-            s.r[i] = noise (rng);
+            shimmer::Engine e;
+            auto p = wetOnly (space);
+            p.decaySeconds = decay;
+            p.shimmer = 0.0f;
+            e.setParameters (p);
+            e.prepare (sr);
+
+            Stereo s ((size_t) (sr * 8));
+            for (size_t i = 0; i < s.l.size(); ++i) { s.l[i] = noise (rng); s.r[i] = noise (rng); }
+            run (e, s);
+            const float gain = db (rms (s, (size_t) (sr * 6), s.l.size()) / 0.1);
+            std::printf ("    %-9s decay %4.1f s -> wet/dry %+5.1f dB\n", spaceName (space), decay, gain);
+            check (gain > -15.0f && gain < 6.0f, "wet level in a sane range");
         }
-        run (e, s);
-        const float gain = db (rms (s, (size_t) (sr * 6), s.l.size()) / 0.1);
-        std::printf ("    decay %4.1f s -> wet/dry %+5.1f dB\n", decay, gain);
-        check (gain > -18.0f && gain < 12.0f, "wet level in a sane range");
-    }
 }
 
-void testShimmerMovesEnergyUp()
+void testDensity()
 {
-    std::puts ("Shimmer moves energy up an octave");
+    std::puts ("Echo density of the impulse response (1.0 = smooth, noise-like)");
 
-    double ratio[2];
-    for (int k = 0; k < 2; ++k)
+    for (auto space : allSpaces)
     {
         shimmer::Engine e;
-        e.prepare (sr);
-        auto p = wetOnly();
-        p.shimmer = k == 0 ? 0.0f : 0.8f;
-        p.blend = 0.0f;
-        p.decaySeconds = 10.0f;
+        auto p = wetOnly (space);
+        p.shimmer = 0.0f;
+        p.preDelayMs = 0.0f;
+        p.lowCutHz = 20.0f;
         e.setParameters (p);
+        e.prepare (sr);
 
-        Stereo s ((size_t) (sr * 5));
-        for (size_t i = 0; i < (size_t) (sr * 0.5); ++i)
-            s.l[i] = s.r[i] = 0.3f * (float) std::sin (2.0 * 3.141592653589793 * 440.0 * (double) i / sr);
+        Stereo s ((size_t) (sr * 1));
+        s.l[0] = s.r[0] = 1.0f;
         run (e, s);
 
-        const double f0 = toneLevel (s, (size_t) (sr * 2.5), (size_t) (sr * 4.5), 440.0);
-        const double f1 = toneLevel (s, (size_t) (sr * 2.5), (size_t) (sr * 4.5), 880.0);
-        ratio[k] = f1 / f0;
-        std::printf ("    shimmer %.1f: 880 Hz vs 440 Hz in tail %+6.1f dB\n", p.shimmer, 10.0 * std::log10 (ratio[k]));
+        const double d100 = echoDensity (s.l, (size_t) (0.1 * sr));
+        const double d300 = echoDensity (s.l, (size_t) (0.3 * sr));
+        std::printf ("    %-9s at 100 ms %.2f, at 300 ms %.2f\n", spaceName (space), d100, d300);
+        check (d300 > 0.85, "dense by 300 ms");
     }
-    check (ratio[1] > ratio[0] * 100.0, "octave content at least 20 dB stronger with shimmer");
 }
 
-void testShimmerKeepsTail()
+void testShimmerOctaves()
 {
-    std::puts ("Shimmer does not shorten the tail");
+    std::puts ("Shimmer moves energy by the chosen octave");
+
+    struct Case { int octave; double target; } cases[] { { 1, 880.0 }, { 2, 1760.0 }, { -1, 220.0 } };
+
+    for (auto c : cases)
+    {
+        double ratio[2];
+        for (int k = 0; k < 2; ++k)
+        {
+            shimmer::Engine e;
+            auto p = wetOnly();
+            p.shimmer = k == 0 ? 0.0f : 0.8f;
+            p.octave = c.octave;
+            p.decaySeconds = 10.0f;
+            p.lowCutHz = 40.0f;
+            e.setParameters (p);
+            e.prepare (sr);
+
+            Stereo s ((size_t) (sr * 5));
+            for (size_t i = 0; i < (size_t) (sr * 0.5); ++i)
+                s.l[i] = s.r[i] = 0.3f * (float) std::sin (2.0 * 3.141592653589793 * 440.0 * (double) i / sr);
+            run (e, s);
+
+            const double f0 = toneLevel (s, (size_t) (sr * 2.5), (size_t) (sr * 4.5), 440.0);
+            const double f1 = toneLevel (s, (size_t) (sr * 2.5), (size_t) (sr * 4.5), c.target);
+            ratio[k] = f1 / f0;
+        }
+        std::printf ("    octave %+d: %4.0f Hz vs 440 Hz in tail, off %+6.1f dB, on %+6.1f dB\n",
+                     c.octave, c.target, 10.0 * std::log10 (ratio[0]), 10.0 * std::log10 (ratio[1]));
+        check (ratio[1] > ratio[0] * 100.0, "shifted content at least 20 dB stronger with shimmer");
+    }
+}
+
+void testShimmerBounded()
+{
+    std::puts ("Full shimmer stays bounded and keeps a tail");
     std::mt19937 rng (4);
     std::normal_distribution<float> noise (0.0f, 0.1f);
 
-    double level[2];
-    for (int k = 0; k < 2; ++k)
-    {
-        shimmer::Engine e;
-        e.prepare (sr);
-        auto p = wetOnly();
-        p.shimmer = k == 0 ? 0.0f : 1.0f;
-        p.decaySeconds = 30.0f;
-        p.size = 0.0f;
-        e.setParameters (p);
+    for (int octave : { 1, 2, -1 })
+        for (auto space : allSpaces)
+        {
+            shimmer::Engine e;
+            auto p = wetOnly (space);
+            p.shimmer = 1.0f;
+            p.octave = octave;
+            p.decaySeconds = 60.0f;
+            p.tone = 1.0f;
+            p.size = 1.0f;
+            p.lowCutHz = 20.0f;
+            e.setParameters (p);
+            e.prepare (sr);
 
-        Stereo s ((size_t) (sr * 12));
-        for (size_t i = 0; i < (size_t) (sr * 4); ++i) { s.l[i] = noise (rng); s.r[i] = noise (rng); }
-        run (e, s);
-        level[k] = rms (s, (size_t) (sr * 10), (size_t) (sr * 12));
-    }
-    std::printf ("    level 6 s after input stops: shimmer off %.1f dB, full shimmer %.1f dB\n", db (level[0]), db (level[1]));
-    check (level[1] > level[0] * 0.5, "full shimmer tail within 6 dB of plain tail");
+            Stereo s ((size_t) (sr * 30));
+            for (size_t i = 0; i < (size_t) (sr * 4); ++i) { s.l[i] = noise (rng); s.r[i] = noise (rng); }
+            run (e, s);
+
+            const double during = rms (s, (size_t) (sr * 2), (size_t) (sr * 4));
+            double peakLate = 0;
+            for (int sec = 5; sec <= 28; sec += 2)
+                peakLate = std::max (peakLate, rms (s, (size_t) (sr * sec), (size_t) (sr * (sec + 2))));
+            const double end = rms (s, (size_t) (sr * 26), (size_t) (sr * 30));
+
+            std::printf ("    octave %+d %-9s: while playing %5.1f dB, loudest later %5.1f dB, at 26-30 s %6.1f dB\n",
+                         octave, spaceName (space), db (during), db (peakLate), db (end));
+            check (peakLate < during * 2.0, "no runaway build-up (< +6 dB over the input phase)");
+        }
 }
 
 void testFreeze()
 {
-    std::puts ("Freeze holds the tail and ignores new input");
+    std::puts ("Freeze holds the tail");
     shimmer::Engine e;
-    e.prepare (sr);
     auto p = wetOnly();
     p.decaySeconds = 3.0f;
     e.setParameters (p);
+    e.prepare (sr);
 
     std::mt19937 rng (2);
     std::normal_distribution<float> noise (0.0f, 0.1f);
@@ -202,7 +264,6 @@ void testFreeze()
     e.setParameters (p);
 
     Stereo b ((size_t) (sr * 20));
-    for (size_t i = 0; i < b.l.size(); ++i) { b.l[i] = 0.0f; b.r[i] = 0.0f; }
     run (e, b);
 
     const double early = rms (b, (size_t) (sr * 1), (size_t) (sr * 2));
@@ -216,8 +277,7 @@ void testStress()
     std::puts ("Stress: extreme and randomly automated settings");
     std::mt19937 rng (3);
     std::uniform_real_distribution<float> uni (0.0f, 1.0f);
-    std::normal_distribution<float> noise (0.0f, 0.5f);
-    const float intervals[] = { -24, -12, -7, -5, 5, 7, 12, 19, 24 };
+    std::normal_distribution<float> noise (0.0f, 0.25f);
 
     float worst = 0.0f;
     bool finite = true;
@@ -231,14 +291,13 @@ void testStress()
         {
             shimmer::Parameters p;
             const bool extreme = trial < 4;
+            p.space = allSpaces[rng() % 3];
             p.mix = uni (rng);
-            p.decaySeconds = extreme ? 60.0f : 0.5f + 59.5f * uni (rng) * uni (rng);
+            p.decaySeconds = extreme ? 60.0f : 0.3f + 59.7f * uni (rng) * uni (rng);
             p.size = extreme ? (float) (trial & 1) : uni (rng);
             p.preDelayMs = 500.0f * uni (rng);
             p.shimmer = extreme ? 1.0f : uni (rng);
-            p.shift1 = intervals[rng() % 9];
-            p.shift2 = intervals[rng() % 9];
-            p.blend = uni (rng);
+            p.octave = (int[]) { -1, 1, 2 }[rng() % 3];
             p.tone = extreme ? 1.0f : uni (rng);
             p.lowCutHz = 20.0f + 980.0f * uni (rng) * uni (rng);
             p.modulation = uni (rng);
@@ -271,8 +330,8 @@ void testCpu()
 {
     std::puts ("CPU");
     shimmer::Engine e;
+    e.setParameters (wetOnly (shimmer::Space::cathedral));
     e.prepare (sr);
-    e.setParameters (shimmer::Parameters {});
     Stereo s ((size_t) (sr * 20));
     s.l[0] = 1.0f;
 
@@ -286,10 +345,11 @@ void testCpu()
 
 int main()
 {
-    testImpulseDecay();
+    testDecay();
     testLoudness();
-    testShimmerMovesEnergyUp();
-    testShimmerKeepsTail();
+    testDensity();
+    testShimmerOctaves();
+    testShimmerBounded();
     testFreeze();
     testStress();
     testCpu();

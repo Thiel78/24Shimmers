@@ -45,7 +45,7 @@ target_sources(TwentyFourShimmers
     PRIVATE
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
-        Source/LuchaLookAndFeel.cpp
+        Source/LuchaStyle.cpp
         Source/MaskArt.cpp)
 
 target_compile_definitions(TwentyFourShimmers
@@ -76,7 +76,7 @@ if(SHIMMER_BUILD_SNAPSHOT)
             tests/UISnapshot.cpp
             Source/PluginProcessor.cpp
             Source/PluginEditor.cpp
-            Source/LuchaLookAndFeel.cpp
+            Source/LuchaStyle.cpp
             Source/MaskArt.cpp)
     target_compile_definitions(UISnapshot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JucePlugin_Name="24 Shimmers")
     target_link_libraries(UISnapshot PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)

@@ -4,33 +4,50 @@ A lucha libre shimmer reverb for macOS (VST3 + Audio Unit), built with JUCE.
 
 ![24 Shimmers](docs/screenshot.png)
 
-Inspired by the Strymon BigSky shimmer: a dense, modulated reverb whose tail keeps
-climbing in pitch. The pitch shifters sit *inside* the reverb's feedback network,
-so every trip round the loop lifts part of the tail by the chosen interval.
+Inspired by the Strymon BigSky shimmer: a lush reverb whose tail keeps climbing
+in pitch. The reverb has three spaces (room, hall, cathedral), each with its own
+early reflections, diffusion and size. The octave shifter sits in a feedback loop
+around the reverb, so each pass adds another octave on top.
 
-## Controls
+## The mask is the interface
 
-| On the mask | |
-|---|---|
-| **Shimmer** (left eye) | How much of the tail cascades up into the next interval. The tail length is kept intact at any setting. |
-| **Decay** (right eye) | Reverb time, 0.5 s to 60 s. |
-| **Freeze** (mouth) | Holds the current tail forever and ignores new input. |
-| **Mix** (belt) | Dry/wet balance. |
+Every control is a feature of the mask. Hover any feature and the banner at the
+bottom shows its name and value.
 
-| El Ring (the room) | |
-|---|---|
-| **Size** | Room size. |
-| **Pre-Delay** | Gap before the reverb starts, up to 500 ms. |
-| **Tone** | How fast the highs die away compared to the lows (dark to bright). |
-| **Low Cut** | High-pass on the reverb and the shimmer path, to keep the low end clean. |
+| Feature | Control | How |
+|---|---|---|
+| Forehead medallion | **Space**: Room / Hall / Cathedral | click to cycle (shift-click goes back) |
+| Left eye | **Shimmer**: how much octave-shifted sound feeds back | drag up/down |
+| Right eye | **Decay**: 0.3 s to 60 s | drag |
+| Crest (centre stripe) | **Mix**: gold fills the crest as it gets wetter | drag |
+| Left eyebrow flame | **Octave**: −1, +1 or +2 (the flame grows) | click to cycle |
+| Right eyebrow flame | **Size** of the space | drag |
+| Left cheek bolt | **Tone**: how fast the highs die away | drag |
+| Right cheek bolt | **Mod**: slow movement in the tail | drag |
+| Left nose stud | **Pre-delay**: up to 500 ms | drag |
+| Right nose stud | **Low cut** | drag |
+| Mouth | **Freeze**: holds the tail forever | click |
 
-| El Cielo (the shimmer) | |
-|---|---|
-| **Shift 1 / Shift 2** | Two pitch voices: ±4th, ±5th, ±1 oct, +1 oct +5th, ±2 oct. |
-| **Blend** | Balance between Shift 1 and Shift 2. |
-| **Mod** | Slow chorus-like modulation of the reverb lines. |
+Hold shift while dragging for fine control. Double-click a feature to reset it.
 
-Double-click any knob to reset it.
+## How it works
+
+```
+input -> pre-delay -+-> early reflections ----------------------------+--> wet
+                    |                                                 |
+                    +--> diffuser (8 ch) --> late reverb (16 lines) --+
+                              ^                          |
+                              +----- octave shifter <----+   (shimmer loop)
+```
+
+- **Early reflections:** a different pattern for each space, scaled by Size.
+- **Diffuser:** four to five mixing stages turn the input into a dense wash
+  before the tail starts. This is what removes the metallic edge.
+- **Late reverb:** a 16-line feedback network with exponentially spread
+  delays, slow wandering modulation, and highs that decay faster than lows.
+- **Shimmer:** a smooth three-grain octave shifter that takes the reverb
+  output and feeds it back through the diffuser. The loop gain is capped, so
+  even 100% shimmer always dies away in the end.
 
 ## Getting the plugin
 
@@ -67,11 +84,11 @@ also a Standalone app there for trying the plugin without a DAW.
 ## Layout
 
 ```
-Source/ShimmerEngine.h      DSP: pre-delay, diffusers, 8-line FDN, granular pitch shifters (plain C++)
+Source/ShimmerEngine.h      DSP: early reflections, diffuser, 16-line FDN, octave shimmer loop (plain C++)
 Source/PluginProcessor.*    JUCE wrapper and parameters (Parameters.h)
-Source/PluginEditor.*       UI: knobs, freeze mouth, mix belt, sparkles
-Source/MaskArt.*            Vector artwork for the mask and ring
-Source/LuchaLookAndFeel.*   Knob and belt drawing
-tests/EngineTest.cpp        Offline DSP checks (decay time, loudness, shimmer, freeze, stability, CPU)
-tests/UISnapshot.cpp        Renders the UI to PNG (-DSHIMMER_BUILD_SNAPSHOT=ON)
+Source/PluginEditor.*       UI: mask hit areas wired to parameters, banner, sparkles
+Source/MaskArt.*            Mask artwork: every feature drawn from its parameter value
+Source/LuchaStyle.*         Colours and text helpers
+tests/EngineTest.cpp        Offline DSP checks (decay, loudness, echo density, octaves, freeze, stability, CPU)
+tests/UISnapshot.cpp        Renders the UI to PNG and checks every feature is clickable (-DSHIMMER_BUILD_SNAPSHOT=ON)
 ```

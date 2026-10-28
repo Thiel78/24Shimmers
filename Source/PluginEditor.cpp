@@ -1,182 +1,142 @@
 #include "PluginEditor.h"
-#include "MaskArt.h"
+#include "LuchaStyle.h"
 
 using namespace juce;
 using namespace Lucha::Colours;
+using MaskArt::Feature;
 
 //==============================================================================
-LuchaKnob::LuchaKnob (AudioProcessorValueTreeState& state, const String& paramID, String labelText, bool isOnMask)
-    : param (*state.getParameter (paramID)), label (std::move (labelText)), onMask (isOnMask)
+MaskControl::MaskControl (RangedAudioParameter& p, String labelText, Kind k, std::function<void()> changed)
+    : param (p), label (std::move (labelText)), kind (k), onChange (std::move (changed)),
+      attachment (p, [this] (float) { if (onChange) onChange(); })
 {
-    slider.setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-    slider.getProperties().set ("lucha_big", onMask);
-    slider.onValueChange = [this] { repaint(); };
-    addAndMakeVisible (slider);
-
-    attachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (state, paramID, slider);
-    slider.setDoubleClickReturnValue (true, param.convertFrom0to1 (param.getDefaultValue()));
+    setMouseCursor (kind == Kind::drag ? MouseCursor::UpDownResizeCursor : MouseCursor::PointingHandCursor);
+    setRepaintsOnMouseActivity (false);
+    attachment.sendInitialUpdate();
 }
 
-void LuchaKnob::resized()
+void MaskControl::setHitArea (const Path& areaInParent)
 {
-    auto b = getLocalBounds();
-    const int knob = jmin (b.getWidth(), b.getHeight() - (onMask ? 28 : 36));
-    slider.setBounds (b.removeFromTop (knob).withSizeKeepingCentre (knob, knob));
+    const auto bounds = areaInParent.getBounds().getSmallestIntegerContainer().expanded (2);
+    setBounds (bounds);
+    hitArea = areaInParent;
+    hitArea.applyTransform (AffineTransform::translation ((float) -bounds.getX(), (float) -bounds.getY()));
 }
 
-void LuchaKnob::paint (Graphics& g)
+int MaskControl::getStep() const
 {
-    auto text = getLocalBounds().toFloat().withTop ((float) slider.getBottom() + 2.0f);
-    const auto value = param.getCurrentValueAsText();
-
-    if (onMask)
-    {
-        const auto line = label + "  " + value;
-        const auto f = Lucha::font (13.0f);
-        const float w = GlyphArrangement::getStringWidth (f, line) + 22.0f;
-        auto tag = text.withHeight (22.0f).withSizeKeepingCentre (w, 22.0f);
-
-        g.setColour (ink.withAlpha (0.9f));
-        g.fillRoundedRectangle (tag, 11.0f);
-        g.setColour (gold);
-        g.drawRoundedRectangle (tag.reduced (0.75f), 11.0f, 1.5f);
-
-        g.setFont (f);
-        g.setColour (gold);
-        g.drawText (label, tag.reduced (11.0f, 0.0f), Justification::centredLeft);
-        g.setColour (cream);
-        g.drawText (value, tag.reduced (11.0f, 0.0f), Justification::centredRight);
-    }
-    else
-    {
-        Lucha::drawOutlinedText (g, label.toUpperCase(), text.removeFromTop (18.0f), Lucha::font (14.0f), gold);
-        g.setColour (cream.withAlpha (0.85f));
-        g.setFont (Lucha::font (12.5f, false));
-        g.drawText (value, text.removeFromTop (16.0f), Justification::centredTop);
-    }
+    return roundToInt (param.convertFrom0to1 (param.getValue()));
 }
 
-//==============================================================================
-FreezeButton::FreezeButton() : Button ("Freeze")
+bool MaskControl::hitTest (int x, int y)
 {
-    setClickingTogglesState (true);
-    setTooltip ("Freeze: hold the tail forever");
+    return hitArea.contains ((float) x, (float) y);
 }
 
-void FreezeButton::paintButton (Graphics& g, bool highlighted, bool)
+void MaskControl::mouseEnter (const MouseEvent&) { if (onChange) onChange(); }
+void MaskControl::mouseExit (const MouseEvent&)  { if (onChange) onChange(); }
+
+void MaskControl::mouseDown (const MouseEvent&)
 {
-    const auto b = getLocalBounds().toFloat().reduced (2.0f);
-    const bool on = getToggleState();
+    dragging = false;
+    dragStartValue = param.getValue();
+}
 
-    g.setColour (ink);
-    g.fillEllipse (b);
+void MaskControl::mouseDrag (const MouseEvent& e)
+{
+    if (kind != Kind::drag || e.mouseWasClicked())
+        return;
 
-    if (on)
+    if (! dragging)
     {
-        g.setGradientFill (ColourGradient (ice.withAlpha (0.95f), b.getCentreX(), b.getCentreY(),
-                                           ice.withAlpha (0.1f), b.getRight(), b.getCentreY(), true));
-        g.fillEllipse (b);
+        dragging = true;
+        attachment.beginGesture();
     }
 
-    // Teeth.
-    g.setColour (cream.withAlpha (on ? 0.9f : 0.75f));
-    const int numTeeth = 6;
-    const float toothW = b.getWidth() * 0.5f / numTeeth;
-    for (int i = 0; i < numTeeth; ++i)
+    const float range = e.mods.isShiftDown() ? 1200.0f : 240.0f;
+    const float value = jlimit (0.0f, 1.0f, dragStartValue - (float) e.getDistanceFromDragStartY() / range);
+    attachment.setValueAsPartOfGesture (param.convertFrom0to1 (value));
+}
+
+void MaskControl::mouseUp (const MouseEvent& e)
+{
+    if (dragging)
     {
-        const float x = b.getCentreX() - toothW * numTeeth * 0.5f + toothW * (float) i;
-        Path tooth;
-        tooth.addTriangle (x + 1.0f, b.getY() + 3.0f, x + toothW - 1.0f, b.getY() + 3.0f, x + toothW * 0.5f, b.getY() + b.getHeight() * 0.26f);
-        g.fillPath (tooth);
+        attachment.endGesture();
+        dragging = false;
+    }
+    else if (e.mouseWasClicked() && e.getNumberOfClicks() == 1)
+    {
+        if (kind == Kind::toggle)
+        {
+            attachment.setValueAsCompleteGesture (param.getValue() > 0.5f ? 0.0f : 1.0f);
+        }
+        else if (kind == Kind::cycle)
+        {
+            const int numSteps = param.getNumSteps();
+            const int next = (getStep() + (e.mods.isShiftDown() ? numSteps - 1 : 1)) % numSteps;
+            attachment.setValueAsCompleteGesture ((float) next);
+        }
     }
 
-    const auto colour = on ? ink : (highlighted ? ice : ice.withAlpha (0.65f));
-    g.setColour (colour);
-    g.setFont (Lucha::font (13.0f));
-    g.drawText ("FREEZE", b.withTrimmedTop (b.getHeight() * 0.25f), Justification::centred);
+    if (onChange)
+        onChange();
+}
+
+void MaskControl::mouseDoubleClick (const MouseEvent&)
+{
+    if (kind == Kind::drag)
+        attachment.setValueAsCompleteGesture (param.convertFrom0to1 (param.getDefaultValue()));
+}
+
+void MaskControl::mouseWheelMove (const MouseEvent&, const MouseWheelDetails& wheel)
+{
+    if (kind != Kind::drag)
+        return;
+
+    const float delta = (wheel.isReversed ? -wheel.deltaY : wheel.deltaY) * 0.1f;
+    attachment.setValueAsCompleteGesture (param.convertFrom0to1 (jlimit (0.0f, 1.0f, param.getValue() + delta)));
 }
 
 //==============================================================================
 ShimmerEditor::ShimmerEditor (ShimmerProcessor& p)
-    : AudioProcessorEditor (p),
-      processor (p),
-      shimmerKnob (p.state, ParamIDs::shimmer, "SHIMMER", true),
-      decayKnob (p.state, ParamIDs::decay, "DECAY", true),
-      sizeKnob (p.state, ParamIDs::size, "Size", false),
-      preDelayKnob (p.state, ParamIDs::preDelay, "Pre-Delay", false),
-      toneKnob (p.state, ParamIDs::tone, "Tone", false),
-      lowCutKnob (p.state, ParamIDs::lowCut, "Low Cut", false),
-      shift1Knob (p.state, ParamIDs::shift1, "Shift 1", false),
-      shift2Knob (p.state, ParamIDs::shift2, "Shift 2", false),
-      blendKnob (p.state, ParamIDs::blend, "Blend", false),
-      modKnob (p.state, ParamIDs::mod, "Mod", false)
+    : AudioProcessorEditor (p), processor (p)
 {
-    setLookAndFeel (&lookAndFeel);
+    struct Spec { const char* paramID; const char* label; MaskControl::Kind kind; };
 
-    for (auto* k : { &shimmerKnob, &decayKnob, &sizeKnob, &preDelayKnob, &toneKnob, &lowCutKnob,
-                     &shift1Knob, &shift2Knob, &blendKnob, &modKnob })
-        addAndMakeVisible (k);
+    // Same order as MaskArt::Feature.
+    const Spec specs[] {
+        { ParamIDs::space,    "SPACE",     MaskControl::Kind::cycle },
+        { ParamIDs::mix,      "MIX",       MaskControl::Kind::drag },
+        { ParamIDs::shimmer,  "SHIMMER",   MaskControl::Kind::drag },
+        { ParamIDs::decay,    "DECAY",     MaskControl::Kind::drag },
+        { ParamIDs::octave,   "OCTAVE",    MaskControl::Kind::cycle },
+        { ParamIDs::size,     "SIZE",      MaskControl::Kind::drag },
+        { ParamIDs::tone,     "TONE",      MaskControl::Kind::drag },
+        { ParamIDs::mod,      "MOD",       MaskControl::Kind::drag },
+        { ParamIDs::preDelay, "PRE-DELAY", MaskControl::Kind::drag },
+        { ParamIDs::lowCut,   "LOW CUT",   MaskControl::Kind::drag },
+        { ParamIDs::freeze,   "FREEZE",    MaskControl::Kind::toggle },
+    };
+    static_assert (std::size (specs) == MaskArt::numFeatures);
 
-    mixSlider.setSliderStyle (Slider::LinearHorizontal);
-    mixSlider.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-    addAndMakeVisible (mixSlider);
-    mixAttachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (p.state, ParamIDs::mix, mixSlider);
-    mixSlider.setDoubleClickReturnValue (true, 0.35);
+    for (const auto& s : specs)
+    {
+        auto c = std::make_unique<MaskControl> (*p.state.getParameter (s.paramID), s.label, s.kind, [this] { repaint(); });
+        addAndMakeVisible (*c);
+        controls.push_back (std::move (c));
+    }
 
-    addAndMakeVisible (freezeButton);
-    freezeAttachment = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (p.state, ParamIDs::freeze, freezeButton);
-
-    setSize (880, 600);
+    setSize (680, 712);
     startTimerHz (30);
-}
-
-ShimmerEditor::~ShimmerEditor()
-{
-    setLookAndFeel (nullptr);
 }
 
 void ShimmerEditor::resized()
 {
-    for (auto [knob, left] : { std::pair { &shimmerKnob, true }, std::pair { &decayKnob, false } })
-    {
-        const auto c = MaskArt::eyeCentre (maskArea, left);
-        knob->setBounds (Rectangle<int> (160, 126).withCentre ({ (int) c.x, (int) c.y + 15 }));
-    }
+    layout = MaskArt::makeLayout (maskArea);
 
-    freezeButton.setBounds (MaskArt::mouthBounds (maskArea).toNearestInt());
-
-    auto layoutPanel = [] (Rectangle<float> panel, std::initializer_list<LuchaKnob*> knobs)
-    {
-        auto area = panel.reduced (8.0f).withTrimmedTop (48.0f).toNearestInt();
-        const int cellW = area.getWidth() / 2, cellH = area.getHeight() / 2;
-        int i = 0;
-        for (auto* k : knobs)
-        {
-            const Rectangle<int> cell (area.getX() + (i % 2) * cellW, area.getY() + (i / 2) * cellH, cellW, cellH);
-            k->setBounds (cell.withSizeKeepingCentre (cellW - 6, 128));
-            ++i;
-        }
-    };
-
-    layoutPanel (leftPanel, { &sizeKnob, &preDelayKnob, &toneKnob, &lowCutKnob });
-    layoutPanel (rightPanel, { &shift1Knob, &shift2Knob, &blendKnob, &modKnob });
-
-    mixSlider.setBounds (beltArea.reduced (58, 0));
-}
-
-void ShimmerEditor::drawPanel (Graphics& g, Rectangle<float> area, const String& title, const String& subtitle)
-{
-    g.setColour (juce::Colours::black.withAlpha (0.55f));
-    g.fillRoundedRectangle (area, 14.0f);
-    g.setColour (gold.withAlpha (0.55f));
-    g.drawRoundedRectangle (area.reduced (1.0f), 14.0f, 2.0f);
-
-    auto header = area.reduced (10.0f, 8.0f).removeFromTop (44.0f);
-    Lucha::drawOutlinedText (g, title, header.removeFromTop (26.0f), Lucha::font (21.0f), gold);
-    g.setColour (cream.withAlpha (0.6f));
-    g.setFont (Lucha::font (11.0f, false));
-    g.drawText (subtitle, header, Justification::centredTop);
+    for (size_t i = 0; i < MaskArt::numFeatures; ++i)
+        controls[i]->setHitArea (layout.hitAreas[i]);
 }
 
 void ShimmerEditor::paint (Graphics& g)
@@ -184,35 +144,79 @@ void ShimmerEditor::paint (Graphics& g)
     const auto bounds = getLocalBounds().toFloat();
     MaskArt::drawBackground (g, bounds);
 
-    // Title.
-    const Rectangle<float> titleArea (24.0f, 12.0f, 360.0f, 48.0f);
-    Lucha::drawOutlinedText (g, "24 SHIMMERS", titleArea.translated (3.0f, 3.0f), Lucha::font (36.0f), pink, Justification::centredLeft);
-    Lucha::drawOutlinedText (g, "24 SHIMMERS", titleArea, Lucha::font (36.0f), gold, Justification::centredLeft);
+    const Rectangle<float> titleArea (22.0f, 10.0f, 320.0f, 44.0f);
+    Lucha::drawOutlinedText (g, "24 SHIMMERS", titleArea.translated (3.0f, 3.0f), Lucha::font (32.0f), pink, Justification::centredLeft);
+    Lucha::drawOutlinedText (g, "24 SHIMMERS", titleArea, Lucha::font (32.0f), gold, Justification::centredLeft);
 
     g.setColour (cream.withAlpha (0.7f));
-    g.setFont (Lucha::font (13.0f));
-    g.drawText ("LUCHA LIBRE SHIMMER REVERB", Rectangle<float> (520.0f, 20.0f, 336.0f, 34.0f), Justification::centredRight);
+    g.setFont (Lucha::font (12.0f));
+    g.drawText ("LUCHA LIBRE SHIMMER REVERB", Rectangle<float> (360.0f, 16.0f, 298.0f, 32.0f), Justification::centredRight);
 
-    drawPanel (g, leftPanel, "EL RING", "THE ROOM");
-    drawPanel (g, rightPanel, "EL CIELO", "THE SHIMMER");
-
-    MaskArt::drawMask (g, maskArea);
+    MaskArt::State state;
+    for (size_t i = 0; i < MaskArt::numFeatures; ++i)
+    {
+        const auto& c = *controls[i];
+        state[i] = { c.getNormalisedValue(), c.getStep(), c.getLabel(), c.getValueText(), c.isActive() };
+    }
+    MaskArt::drawMask (g, layout, state);
 
     for (const auto& s : sparkles)
+        MaskArt::drawSparkle (g, s.pos, s.size, s.colour, std::sin (MathConstants<float>::pi * s.age / s.life));
+
+    drawBanner (g);
+}
+
+// The ring announcer: names whatever you're touching, otherwise sums up the patch.
+void ShimmerEditor::drawBanner (Graphics& g)
+{
+    const auto b = bannerArea;
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.fillRoundedRectangle (b.translated (0.0f, 3.0f), 12.0f);
+    g.setColour (ink.withAlpha (0.92f));
+    g.fillRoundedRectangle (b, 12.0f);
+    g.setColour (gold.withAlpha (0.8f));
+    g.drawRoundedRectangle (b.reduced (1.0f), 12.0f, 2.0f);
+
+    const MaskControl* active = nullptr;
+    for (auto& c : controls)
+        if (c->isActive())
+            active = c.get();
+
+    auto text = b.reduced (18.0f, 6.0f);
+
+    if (active != nullptr)
     {
-        const float alpha = std::sin (MathConstants<float>::pi * s.age / s.life);
-        MaskArt::drawSparkle (g, s.pos, s.size, s.colour, alpha);
+        auto valueText = active->getValueText();
+        if (active == &control (Feature::mouth))
+            valueText = active->getNormalisedValue() > 0.5f ? "ON" : "OFF";
+
+        g.setFont (Lucha::font (24.0f));
+        g.setColour (gold);
+        g.drawText (active->getLabel(), text.removeFromLeft (text.getWidth() * 0.5f).withTrimmedRight (10.0f), Justification::centredRight);
+        g.setColour (cream);
+        g.drawText (valueText.toUpperCase(), text.withTrimmedLeft (10.0f), Justification::centredLeft);
+        return;
     }
 
-    // Belt ends.
-    const auto belt = beltArea.toFloat();
-    Lucha::drawOutlinedText (g, "DRY", belt.withWidth (52.0f), Lucha::font (16.0f), cream);
-    Lucha::drawOutlinedText (g, "WET", belt.withTrimmedLeft (belt.getWidth() - 52.0f), Lucha::font (16.0f), cream);
+    const auto dot = "   " + String::fromUTF8 ("\xc2\xb7") + "   ";
+    const auto summary = control (Feature::medallion).getValueText().toUpperCase()
+                       + dot + control (Feature::eyeRight).getValueText()
+                       + dot + "SHIMMER " + control (Feature::eyeLeft).getValueText()
+                       + "  " + control (Feature::flameLeft).getValueText().toUpperCase()
+                       + dot + "MIX " + control (Feature::crest).getValueText();
+
+    g.setColour (cream);
+    g.setFont (Lucha::font (17.0f));
+    g.drawText (summary, text.removeFromTop (text.getHeight() * 0.58f), Justification::centredBottom);
+    g.setColour (cream.withAlpha (0.5f));
+    g.setFont (Lucha::font (11.0f, false));
+    g.drawText ("drag the eyes, crest, flames, bolts and studs" + dot + "click the medallion, octave flame and mouth" + dot + "double-click resets",
+                text, Justification::centredTop);
 }
 
 void ShimmerEditor::spawnSparkles (int count, float startAgeRange)
 {
-    const bool frozen = processor.state.getRawParameterValue (ParamIDs::freeze)->load() > 0.5f;
+    const bool frozen = control (Feature::mouth).getNormalisedValue() > 0.5f;
     const Colour palette[] = { gold, cream, pink, ice };
     const auto c = maskArea.getCentre();
 
@@ -238,9 +242,8 @@ void ShimmerEditor::timerCallback()
     const float dt = 1.0f / 30.0f;
     level = jmax (jmin (1.0f, processor.takeOutputPeak()), level * 0.9f);
 
-    const auto& st = processor.state;
-    const float shimmer = st.getRawParameterValue (ParamIDs::shimmer)->load();
-    const bool frozen = st.getRawParameterValue (ParamIDs::freeze)->load() > 0.5f;
+    const float shimmer = control (Feature::eyeLeft).getNormalisedValue();
+    const bool frozen = control (Feature::mouth).getNormalisedValue() > 0.5f;
 
     spawnBudget += frozen ? 0.35f : shimmer * (0.15f + 5.0f * level);
     const int count = (int) spawnBudget;
@@ -259,5 +262,5 @@ void ShimmerEditor::timerCallback()
                     sparkles.end());
 
     if (hadSparkles || ! sparkles.empty())
-        repaint (maskArea.expanded (80.0f, 40.0f).toNearestInt());
+        repaint (maskArea.expanded (70.0f, 30.0f).toNearestInt());
 }

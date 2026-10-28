@@ -2,46 +2,59 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-#include "LuchaLookAndFeel.h"
+#include "MaskArt.h"
 #include "PluginProcessor.h"
 
-// A rotary knob with its name and current value underneath.
-// On the mask the text sits in a black tag so it reads over the artwork.
-class LuchaKnob : public juce::Component
+// An invisible hit area shaped like one feature of the mask, wired to a parameter.
+// The editor draws the feature; this component only handles the mouse.
+class MaskControl : public juce::Component
 {
 public:
-    LuchaKnob (juce::AudioProcessorValueTreeState& state, const juce::String& paramID, juce::String label, bool onMask);
+    enum class Kind { drag, cycle, toggle };
 
-    void paint (juce::Graphics&) override;
-    void resized() override;
+    MaskControl (juce::RangedAudioParameter& param, juce::String label, Kind kind, std::function<void()> onChange);
+
+    void setHitArea (const juce::Path& areaInParent);
+
+    float getNormalisedValue() const { return param.getValue(); }
+    int getStep() const;
+    const juce::String& getLabel() const { return label; }
+    juce::String getValueText() const { return param.getCurrentValueAsText(); }
+    bool isActive() const { return isMouseOverOrDragging(); }
+
+    bool hitTest (int x, int y) override;
+    void mouseEnter (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
-    juce::Slider slider;
     juce::RangedAudioParameter& param;
     juce::String label;
-    bool onMask;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
-};
-
-// Lives in the mask's mouth.
-class FreezeButton : public juce::Button
-{
-public:
-    FreezeButton();
-    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    Kind kind;
+    std::function<void()> onChange;
+    juce::ParameterAttachment attachment;
+    juce::Path hitArea;
+    float dragStartValue = 0.0f;
+    bool dragging = false;
 };
 
 class ShimmerEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit ShimmerEditor (ShimmerProcessor&);
-    ~ShimmerEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
     // startAgeRange > 0 starts sparkles part-way through their life (used for previews).
     void spawnSparkles (int count, float startAgeRange = 0.0f);
+
+    const MaskArt::Layout& getLayout() const { return layout; }
+    juce::Component* getControl (MaskArt::Feature f) const { return controls[(size_t) f].get(); }
 
 private:
     struct Sparkle
@@ -52,25 +65,16 @@ private:
     };
 
     void timerCallback() override;
-    void drawPanel (juce::Graphics&, juce::Rectangle<float> area, const juce::String& title, const juce::String& subtitle);
+    void drawBanner (juce::Graphics&);
+    const MaskControl& control (MaskArt::Feature f) const { return *controls[(size_t) f]; }
 
     ShimmerProcessor& processor;
-    LuchaLookAndFeel lookAndFeel;
 
-    LuchaKnob shimmerKnob, decayKnob;
-    LuchaKnob sizeKnob, preDelayKnob, toneKnob, lowCutKnob;
-    LuchaKnob shift1Knob, shift2Knob, blendKnob, modKnob;
+    std::vector<std::unique_ptr<MaskControl>> controls; // indexed by MaskArt::Feature
+    MaskArt::Layout layout;
 
-    juce::Slider mixSlider;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAttachment;
-
-    FreezeButton freezeButton;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> freezeAttachment;
-
-    juce::Rectangle<float> maskArea { 240.0f, 68.0f, 400.0f, 424.0f };
-    juce::Rectangle<float> leftPanel { 20.0f, 76.0f, 200.0f, 408.0f };
-    juce::Rectangle<float> rightPanel { 660.0f, 76.0f, 200.0f, 408.0f };
-    juce::Rectangle<int> beltArea { 70, 508, 740, 74 };
+    const juce::Rectangle<float> maskArea { 100.0f, 60.0f, 480.0f, 560.0f };
+    const juce::Rectangle<float> bannerArea { 60.0f, 640.0f, 560.0f, 56.0f };
 
     std::vector<Sparkle> sparkles;
     juce::Random random;

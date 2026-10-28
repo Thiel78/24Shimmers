@@ -51,9 +51,8 @@ private:
     std::atomic<float>* size = nullptr;
     std::atomic<float>* preDelay = nullptr;
     std::atomic<float>* shimmerAmount = nullptr;
-    std::atomic<float>* shift1 = nullptr;
-    std::atomic<float>* shift2 = nullptr;
-    std::atomic<float>* blend = nullptr;
+    std::atomic<float>* space = nullptr;
+    std::atomic<float>* octave = nullptr;
     std::atomic<float>* tone = nullptr;
     std::atomic<float>* lowCut = nullptr;
     std::atomic<float>* mod = nullptr;

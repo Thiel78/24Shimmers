@@ -12,9 +12,8 @@ ShimmerProcessor::ShimmerProcessor()
     size = state.getRawParameterValue (ParamIDs::size);
     preDelay = state.getRawParameterValue (ParamIDs::preDelay);
     shimmerAmount = state.getRawParameterValue (ParamIDs::shimmer);
-    shift1 = state.getRawParameterValue (ParamIDs::shift1);
-    shift2 = state.getRawParameterValue (ParamIDs::shift2);
-    blend = state.getRawParameterValue (ParamIDs::blend);
+    space = state.getRawParameterValue (ParamIDs::space);
+    octave = state.getRawParameterValue (ParamIDs::octave);
     tone = state.getRawParameterValue (ParamIDs::tone);
     lowCut = state.getRawParameterValue (ParamIDs::lowCut);
     mod = state.getRawParameterValue (ParamIDs::mod);
@@ -23,21 +22,16 @@ ShimmerProcessor::ShimmerProcessor()
 
 shimmer::Parameters ShimmerProcessor::readParameters() const
 {
-    auto interval = [] (const std::atomic<float>* choice)
-    {
-        const int index = juce::jlimit (0, (int) std::size (shiftSemitones) - 1, (int) choice->load());
-        return shiftSemitones[index];
-    };
+    const int octaveIndex = juce::jlimit (0, (int) std::size (octaveValues) - 1, (int) octave->load());
 
     shimmer::Parameters p;
+    p.space = (shimmer::Space) juce::jlimit (0, 2, (int) space->load());
     p.mix = mix->load();
     p.decaySeconds = decay->load();
     p.size = size->load();
     p.preDelayMs = preDelay->load();
     p.shimmer = shimmerAmount->load();
-    p.shift1 = interval (shift1);
-    p.shift2 = interval (shift2);
-    p.blend = blend->load();
+    p.octave = octaveValues[octaveIndex];
     p.tone = tone->load();
     p.lowCutHz = lowCut->load();
     p.modulation = mod->load();
@@ -47,8 +41,8 @@ shimmer::Parameters ShimmerProcessor::readParameters() const
 
 void ShimmerProcessor::prepareToPlay (double sampleRate, int)
 {
-    engine.prepare (sampleRate);
     engine.setParameters (readParameters());
+    engine.prepare (sampleRate);
 }
 
 void ShimmerProcessor::reset()
