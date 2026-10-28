@@ -1,0 +1,22 @@
+24 SHIMMERS - install on macOS
+==============================
+
+Easiest:
+  1. Right-click "install.command" and choose Open (then Open again in the
+     warning). A plain double-click is blocked because the script isn't signed.
+  2. Restart Ableton Live.
+
+Or in Terminal, from this folder:
+  bash install.command
+
+By hand:
+  - Copy "24 Shimmers.vst3"      to ~/Library/Audio/Plug-Ins/VST3/
+  - Copy "24 Shimmers.component" to ~/Library/Audio/Plug-Ins/Components/
+  - Then run:
+      xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"24 Shimmers.vst3"
+      xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/"24 Shimmers.component"
+
+In Ableton Live:
+  Settings > Plug-Ins: turn on "Use Audio Units v2" and/or
+  "Use VST3 Plug-In System Folders", then press Rescan.
+  The plugin appears in the browser under Plug-Ins > Thiel > 24 Shimmers.
